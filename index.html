@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="fil">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XOX Online</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#1b1f3b;--cell:#272c52;--cell-hi:#323969;--ink:#f4f1ff;--mute:#9aa0d0;--x:#ff5d73;--o:#5ce1e6;--ok:#ffd166}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font-family:'Baloo 2',system-ui,sans-serif;display:flex;justify-content:center;padding:20px}
+main{width:100%;max-width:420px;display:flex;flex-direction:column;gap:18px;justify-content:center}
+h1{font-size:2.6rem;margin:0;font-weight:800;letter-spacing:.02em}
+h1 .x{color:var(--x)}h1 .o{color:var(--o)}
+p{margin:0;color:var(--mute)}
+button,input{font:inherit;border-radius:14px;border:2px solid transparent}
+button{background:var(--x);color:#fff;padding:12px 18px;font-weight:800;font-size:1.05rem;cursor:pointer}
+button.alt{background:var(--cell);border-color:var(--cell-hi);color:var(--ink)}
+button:focus-visible,input:focus-visible,.cell:focus-visible{outline:3px solid var(--ok);outline-offset:2px}
+input{background:var(--cell);color:var(--ink);padding:12px 14px;text-transform:uppercase;letter-spacing:.3em;text-align:center;font-size:1.2rem;width:100%}
+.row{display:flex;gap:10px}
+.hidden{display:none!important}
+#status{font-size:1.35rem;font-weight:800;min-height:2rem}
+.board{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;aspect-ratio:1}
+.cell{background:var(--cell);border:0;border-radius:18px;font-size:clamp(2.6rem,16vw,4.6rem);font-weight:800;color:var(--ink);padding:0;display:flex;align-items:center;justify-content:center}
+.cell:not(:disabled):active{background:var(--cell-hi)}
+.cell.X{color:var(--x)}.cell.O{color:var(--o)}
+.cell.win{background:var(--cell-hi);box-shadow:inset 0 0 0 3px var(--ok)}
+.score{display:flex;justify-content:space-between;font-weight:800}
+.score .x{color:var(--x)}.score .o{color:var(--o)}
+.code{font-size:2.2rem;letter-spacing:.35em;font-weight:800;color:var(--ok);background:var(--cell);border-radius:14px;padding:6px 6px 6px 16px;text-align:center}
+#err{color:var(--x);min-height:1.4rem}
+@media (prefers-reduced-motion:no-preference){.cell.X,.cell.O{animation:pop .15s ease-out}@keyframes pop{from{transform:scale(.6)}to{transform:scale(1)}}}
+</style>
+</head>
+<body>
+<main>
+  <h1><span class="x">X</span><span class="o">O</span><span class="x">X</span> Online</h1>
+
+  <section id="lobby" style="display:flex;flex-direction:column;gap:14px">
+    <p>Maglaro kasama ang kaibigan mo. Gumawa ng room at ibigay ang code, o ilagay ang code nila.</p>
+    <button id="quick">Hanap ng random na kalaban</button>
+    <button class="alt" id="create">Gumawa ng room</button>
+    <div class="row">
+      <input id="codeIn" maxlength="4" placeholder="CODE" autocomplete="off" aria-label="Room code">
+      <button class="alt" id="join">Sumali</button>
+    </div>
+    <div id="err" role="alert"></div>
+  </section>
+
+  <section id="game" class="hidden" style="display:flex;flex-direction:column;gap:14px">
+    <div id="invite" class="hidden" style="display:flex;flex-direction:column;gap:10px">
+      <p>Ibigay sa kaibigan mo ang code:</p>
+      <div class="code" id="code"></div>
+      <button class="alt" id="share">Ibahagi ang link</button>
+    </div>
+    <div class="score"><span class="x" id="sx"></span><span id="sd"></span><span class="o" id="so"></span></div>
+    <div id="status" aria-live="polite"></div>
+    <div class="board" id="board"></div>
+    <div class="row">
+      <button id="again" class="hidden">Laro ulit</button>
+      <button class="alt" id="leave">Umalis</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let ws, st = null;
+const board = $('board');
+const cells = Array.from({ length: 9 }, (_, i) => {
+  const b = document.createElement('button');
+  b.className = 'cell';
+  b.setAttribute('aria-label', 'Kahon ' + (i + 1));
+  b.onclick = () => send({ type: 'move', i });
+  board.appendChild(b);
+  return b;
+});
+
+function connect(then) {
+  if (ws && ws.readyState === 1) return then();
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+  ws.onopen = then;
+  ws.onmessage = (e) => handle(JSON.parse(e.data));
+  ws.onclose = () => { if (st) { st = null; show(false); $('err').textContent = 'Nawala ang koneksyon. Subukan ulit.'; } };
+}
+const send = (o) => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
+
+function show(inGame) {
+  $('lobby').classList.toggle('hidden', inGame);
+  $('game').classList.toggle('hidden', !inGame);
+}
+
+function handle(m) {
+  if (m.type === 'error') { $('err').textContent = m.msg; return; }
+  if (m.type === 'left') { st = null; show(false); history.replaceState(null, '', location.pathname); $('err').textContent = 'Umalis ang kalaro mo.'; return; }
+  if (m.type === 'state') { st = m; $('err').textContent = ''; render(); }
+}
+
+function render() {
+  show(true);
+  $('code').textContent = st.code;
+  $('invite').classList.toggle('hidden', st.full || st.quick);
+  $('sx').textContent = 'X: ' + st.scores.X + (st.you === 'X' ? ' (ikaw)' : '');
+  $('so').textContent = 'O: ' + st.scores.O + (st.you === 'O' ? ' (ikaw)' : '');
+  $('sd').textContent = 'Tabla: ' + st.scores.draw;
+  const win = st.result && st.result.line ? st.result.line : [];
+  cells.forEach((c, i) => {
+    const v = st.board[i];
+    c.textContent = v || '';
+    c.className = 'cell' + (v ? ' ' + v : '') + (win.includes(i) ? ' win' : '');
+    c.disabled = !!v || !st.full || !!st.result || st.turn !== st.you;
+  });
+  let s;
+  if (!st.full) s = st.quick ? 'Naghahanap ng kalaban…' : 'Naghihintay ng kalaro…';
+  else if (st.result) s = st.result.w === 'draw' ? 'Tabla!' : (st.result.w === st.you ? 'Panalo ka! 🎉' : 'Talo ka. Ulit?');
+  else s = st.turn === st.you ? 'Ikaw na! (' + st.you + ')' : 'Hintayin ang kalaban…';
+  $('status').textContent = s;
+  $('again').classList.toggle('hidden', !st.result);
+  if (st.full) history.replaceState(null, '', location.pathname);
+  else if (!st.quick) history.replaceState(null, '', '?room=' + st.code);
+}
+
+$('quick').onclick = () => connect(() => send({ type: 'quick' }));
+$('create').onclick = () => connect(() => send({ type: 'create' }));
+const join = (code) => connect(() => send({ type: 'join', code }));
+$('join').onclick = () => { const c = $('codeIn').value.trim(); if (c.length === 4) join(c); else $('err').textContent = 'Maglagay ng 4-letter code.'; };
+$('codeIn').onkeydown = (e) => { if (e.key === 'Enter') $('join').click(); };
+$('again').onclick = () => send({ type: 'rematch' });
+$('leave').onclick = () => { if (ws) ws.close(); st = null; show(false); history.replaceState(null, '', location.pathname); };
+$('share').onclick = async () => {
+  const url = location.origin + '/?room=' + st.code;
+  try { if (navigator.share) await navigator.share({ title: 'XOX Online', text: 'Laro tayo ng XOX!', url }); else { await navigator.clipboard.writeText(url); $('share').textContent = 'Nakopya na!'; } } catch (e) {}
+};
+
+const q = new URLSearchParams(location.search).get('room');
+if (q) { $('codeIn').value = q; join(q); }
+</script>
+</body>
+</html>
